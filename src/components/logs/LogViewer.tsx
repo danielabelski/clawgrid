@@ -17,77 +17,58 @@ export function LogViewer({ instance }: { instance: OpenClawInstance }) {
     setLoading(true)
     try {
       const res = await fetch(`/api/ssh/${instance.id}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'logs', args: { lines } }),
       })
       const data = await res.json()
       setLogs(data.logs ?? data.error ?? 'No output')
       setTimeout(() => bottomRef.current?.scrollIntoView(), 50)
-    } finally {
-      setLoading(false)
-    }
+    } finally { setLoading(false) }
   }, [instance.id, lines])
 
   const loadStats = useCallback(async () => {
     setLoading(true)
     try {
       const res = await fetch(`/api/ssh/${instance.id}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'stats' }),
       })
       const data = await res.json()
       setStats(data.stats ?? data.error ?? 'No output')
-    } finally {
-      setLoading(false)
-    }
+    } finally { setLoading(false) }
   }, [instance.id])
 
-  useEffect(() => {
-    if (tab === 'logs') loadLogs()
-    else loadStats()
-  }, [tab, loadLogs, loadStats])
+  useEffect(() => { tab === 'logs' ? loadLogs() : loadStats() }, [tab, loadLogs, loadStats])
 
   async function restart() {
     if (!confirm(`Restart OpenClaw gateway on ${instance.name}?`)) return
-    setRestarting(true)
-    setRestartMsg('')
+    setRestarting(true); setRestartMsg('')
     try {
       const res = await fetch(`/api/ssh/${instance.id}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'restart' }),
       })
       const data = await res.json()
       setRestartMsg(data.code === 0 ? 'Gateway restarted successfully.' : `Exit ${data.code}: ${data.stderr}`)
       setTimeout(loadLogs, 3000)
-    } catch (e) {
-      setRestartMsg(e instanceof Error ? e.message : 'error')
-    } finally {
-      setRestarting(false)
-    }
+    } catch (e) { setRestartMsg(e instanceof Error ? e.message : 'error') }
+    finally { setRestarting(false) }
   }
 
-  const TABS = [{ id: 'logs', label: 'Gateway Logs' }, { id: 'stats', label: 'System Stats' }] as const
-
   return (
-    <div className="flex flex-col" style={{ height: '100vh' }}>
-      <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-        <div className="flex items-center gap-3">
-          <Terminal size={15} style={{ color: 'var(--accent)' }} />
-          <div className="flex gap-1">
-            {TABS.map(t => (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 16px', borderBottom: '1px solid var(--border)', flexShrink: 0, gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Terminal size={14} style={{ color: 'var(--accent)' }} />
+          <div style={{ display: 'flex', gap: 2 }}>
+            {(['logs', 'stats'] as const).map(t => (
               <button
-                key={t.id}
-                onClick={() => setTab(t.id)}
-                className="px-3 py-1 rounded-md text-sm transition-colors"
-                style={{
-                  background: tab === t.id ? 'var(--surface2)' : 'transparent',
-                  color: tab === t.id ? 'var(--text)' : 'var(--text-muted)',
-                }}
+                key={t}
+                onClick={() => setTab(t)}
+                style={{ padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: tab === t ? 500 : 400, background: tab === t ? 'var(--surface2)' : 'transparent', color: tab === t ? 'var(--text)' : 'var(--text-muted)', border: 'none', cursor: 'pointer' }}
               >
-                {t.label}
+                {t === 'logs' ? 'Gateway Logs' : 'System Stats'}
               </button>
             ))}
           </div>
@@ -95,43 +76,40 @@ export function LogViewer({ instance }: { instance: OpenClawInstance }) {
             <select
               value={lines}
               onChange={e => setLines(Number(e.target.value))}
-              className="text-xs rounded-md px-2 py-1 outline-none"
-              style={{ background: 'var(--surface2)', color: 'var(--text-muted)', border: '1px solid var(--border)' }}
+              style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, background: 'var(--surface2)', color: 'var(--text-muted)', border: '1px solid var(--border)', width: 'auto' }}
             >
               {[50, 100, 200, 500].map(n => <option key={n} value={n}>{n} lines</option>)}
             </select>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <button
-            onClick={restart}
-            disabled={restarting}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-colors"
-            style={{ background: 'rgba(239,68,68,0.1)', color: 'var(--error)', border: '1px solid rgba(239,68,68,0.2)' }}
+            onClick={restart} disabled={restarting}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 7, fontSize: 12, background: 'var(--error-dim)', color: 'var(--error)', border: '1px solid rgba(239,68,68,0.2)', cursor: 'pointer' }}
           >
-            <RotateCcw size={11} className={restarting ? 'animate-spin' : ''} />
+            <RotateCcw size={11} style={{ animation: restarting ? 'spin 1s linear infinite' : 'none' }} />
             Restart Gateway
           </button>
           <button
-            onClick={() => tab === 'logs' ? loadLogs() : loadStats()}
-            disabled={loading}
-            className="p-1.5 rounded-lg transition-colors"
-            style={{ background: 'var(--surface2)', color: 'var(--text-muted)' }}
+            onClick={() => tab === 'logs' ? loadLogs() : loadStats()} disabled={loading}
+            style={{ padding: 7, borderRadius: 7, background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer' }}
           >
-            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+            <RefreshCw size={12} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
           </button>
         </div>
       </div>
 
       {restartMsg && (
-        <div className="px-5 py-2 text-xs" style={{ background: 'var(--surface2)', color: restartMsg.includes('success') ? 'var(--success)' : 'var(--error)' }}>
+        <div style={{ padding: '8px 16px', fontSize: 12, background: 'var(--surface2)', color: restartMsg.includes('success') ? 'var(--success)' : 'var(--error)', flexShrink: 0 }}>
           {restartMsg}
         </div>
       )}
 
-      <div className="flex-1 overflow-auto p-5 font-mono text-xs leading-relaxed" style={{ background: 'var(--bg)' }}>
-        <pre className="whitespace-pre-wrap" style={{ color: '#a3e635' }}>
-          {tab === 'logs' ? (logs || (loading ? 'Loading…' : 'No logs')) : (stats || (loading ? 'Loading…' : 'No data'))}
+      <div style={{ flex: 1, overflow: 'auto', padding: 16, background: '#0a0c10' }}>
+        <pre style={{ fontSize: 12, lineHeight: 1.65, whiteSpace: 'pre-wrap', fontFamily: "'SF Mono','Fira Code',monospace", color: '#a3e635', margin: 0 }}>
+          {tab === 'logs'
+            ? (logs || (loading ? 'Loading…' : 'No logs'))
+            : (stats || (loading ? 'Loading…' : 'No data'))}
         </pre>
         <div ref={bottomRef} />
       </div>

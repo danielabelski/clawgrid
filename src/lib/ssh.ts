@@ -8,6 +8,25 @@ export interface SshResult {
   code: number
 }
 
+function buildConnectConfig(instance: OpenClawInstance) {
+  const base = {
+    host: instance.sshHost,
+    port: instance.sshPort ?? 22,
+    username: instance.sshUser,
+    readyTimeout: 10000,
+  }
+  // If key file exists on disk, use it directly (works for unencrypted keys or when agent is also available)
+  try {
+    const keyData = fs.readFileSync(instance.sshKeyPath)
+    return { ...base, privateKey: keyData, agent: process.env.SSH_AUTH_SOCK }
+  } catch {
+    // Key file unreadable — fall back to agent only (covers passphrase-protected keys)
+    const agent = process.env.SSH_AUTH_SOCK
+    if (!agent) throw new Error(`SSH key not found at ${instance.sshKeyPath} and no SSH_AUTH_SOCK agent available. Run: ssh-add ${instance.sshKeyPath}`)
+    return { ...base, agent }
+  }
+}
+
 export function runSshCommand(instance: OpenClawInstance, command: string): Promise<SshResult> {
   return new Promise((resolve, reject) => {
     const conn = new Client()
@@ -26,12 +45,12 @@ export function runSshCommand(instance: OpenClawInstance, command: string): Prom
       })
     })
     conn.on('error', reject)
-    conn.connect({
-      host: instance.sshHost,
-      port: 22,
-      username: instance.sshUser,
-      privateKey: fs.readFileSync(instance.sshKeyPath),
-    })
+
+    try {
+      conn.connect(buildConnectConfig(instance))
+    } catch (e) {
+      reject(e)
+    }
   })
 }
 
