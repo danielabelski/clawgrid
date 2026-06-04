@@ -1,40 +1,28 @@
 #!/usr/bin/env bash
-# Opens SSH tunnels from your Mac to all three OpenClaw gateways via hub-server.
-# Run this once before starting `npm run dev`, keep it running in a terminal.
+# Forward OpenClaw gateways to localhost via hub-server's autossh tunnel endpoints.
+# Keep running in a terminal while using the control panel locally.
 #
-# Tunnels created:
-#   localhost:4000  →  vm-openclaw:18789  (Command gateway)
-#   localhost:4001  →  vm-tasks:18789     (Supply gateway)
-#   localhost:4002  →  vm-voice:18789     (Voice gateway)
-#   localhost:2222  →  vm-openclaw:22     (Command SSH for management)
-#   localhost:2223  →  vm-tasks:22        (Supply SSH for management)
-#   localhost:2224  →  vm-voice:22        (Voice SSH for management)
+#   localhost:4000  →  hub-server:18789  →  vm-openclaw gateway (Command)
+#   localhost:4001  →  hub-server:18790  →  vm-tasks gateway    (Supply)
+#   localhost:4002  →  hub-server:18791  →  vm-voice gateway    (Voice)
 #
-# Prerequisites:
-#   ssh-add ~/.ssh/id_ed25519   ← run this first to unlock your key
+# SSH management (logs, crons, memory) uses a jump-host connection internally
+# — no extra ports needed.
 
-set -e
+KEY="$HOME/.ssh/openclaw_panel"
 
-HUB="openclaw@bastion.example.com"
-KEY="$HOME/.ssh/id_ed25519"
-
-echo "🔑 Checking SSH agent..."
-if ! ssh-add -l &>/dev/null; then
-  echo "   No keys in agent. Run: ssh-add ~/.ssh/id_ed25519"
-  echo "   Then re-run this script."
+if [ ! -f "$KEY" ]; then
+  echo "Panel key missing: $KEY"
+  echo "Run setup once: ssh-keygen -t ed25519 -f ~/.ssh/openclaw_panel -N ''"
   exit 1
 fi
 
-echo "🌐 Opening tunnels to OpenClaw fleet via hub-server..."
-echo "   4000 → vm-openclaw gateway (command)"
-echo "   4001 → vm-tasks gateway    (supply)"
-echo "   4002 → vm-voice gateway    (voice)"
-echo "   2222 → vm-openclaw SSH"
-echo "   2223 → vm-tasks SSH"
-echo "   2224 → vm-voice SSH"
+echo "Connecting to OpenClaw fleet via hub-server..."
+echo "  localhost:4000 → COMMAND (2026.5.26)"
+echo "  localhost:4001 → SUPPLY  (2026.5.26)"
+echo "  localhost:4002 → VOICE   (2026.5.26)"
 echo ""
-echo "   Press Ctrl+C to close all tunnels."
-echo ""
+echo "Press Ctrl+C to close."
 
 ssh -N \
   -i "$KEY" \
@@ -42,10 +30,7 @@ ssh -N \
   -o ServerAliveInterval=30 \
   -o ServerAliveCountMax=3 \
   -o ExitOnForwardFailure=yes \
-  -L 4000:10.0.0.10:18789 \
-  -L 4001:10.0.0.11:18789 \
-  -L 4002:10.0.0.12:18789 \
-  -L 2222:10.0.0.10:22 \
-  -L 2223:10.0.0.11:22 \
-  -L 2224:10.0.0.12:22 \
-  "$HUB"
+  -L 4000:localhost:18789 \
+  -L 4001:localhost:18790 \
+  -L 4002:localhost:18791 \
+  openclaw@bastion.example.com
