@@ -1,5 +1,5 @@
 'use client'
-import { sshExec } from '@/lib/utils'
+import { sshExec, uuid } from '@/lib/utils'
 import { useState, useEffect, useCallback } from 'react'
 import {
   Shield, AlertTriangle, CheckCircle, XCircle, RefreshCw,
@@ -106,7 +106,7 @@ function scanRisks(approvals: ExecApprovals | null, gatewayAuthMode: string): Ri
     }
 
     // Empty blocklist with permissive mode
-    if (cfg.security !== 'full' && cfg.blocklist.length === 0) {
+    if (cfg.security !== 'full' && (cfg.blocklist ?? []).length === 0) {
       risks.push({
         id: `no-block-${agentId}`, severity: 'medium', agent: agentId,
         title: `${label}: No blocklist with non-full security`,
@@ -116,7 +116,7 @@ function scanRisks(approvals: ExecApprovals | null, gatewayAuthMode: string): Ri
     }
 
     // Wildcard or broad patterns in allowlist
-    const broadPatterns = cfg.allowlist.filter(a =>
+    const broadPatterns = (cfg.allowlist ?? []).filter(a =>
       a.pattern === '*' || a.pattern === '/**' || a.pattern.endsWith('/*')
     )
     if (broadPatterns.length > 0) {
@@ -148,10 +148,10 @@ function scanRisks(approvals: ExecApprovals | null, gatewayAuthMode: string): Ri
     }
 
     // Large allowlist (many approved commands = large attack surface)
-    if (cfg.allowlist.length > 20) {
+    if ((cfg.allowlist ?? []).length > 20) {
       risks.push({
         id: `large-allow-${agentId}`, severity: 'low', agent: agentId,
-        title: `${label}: Large allowlist (${cfg.allowlist.length} entries)`,
+        title: `${label}: Large allowlist (${(cfg.allowlist ?? []).length} entries)`,
         detail: `A large allowlist increases attack surface. Review entries for commands that are no longer needed.`,
         fix: `Audit and prune the allowlist, removing entries not used in the last 30 days.`,
       })
@@ -189,7 +189,7 @@ function GuardrailPanel({
   function addBlocklist() {
     const p = newBlock.trim()
     if (!p) return
-    const entry: AllowEntry = { id: crypto.randomUUID(), pattern: p }
+    const entry: AllowEntry = { id: uuid(), pattern: p }
     setLocal(prev => ({ ...prev, blocklist: [...prev.blocklist, entry] }))
     setNewBlock('')
   }
@@ -342,7 +342,18 @@ PYEOF`)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let data: Record<string, any> = {}
       try { data = JSON.parse(out.trim() || '{}') } catch { /* use default */ }
-      if (data.approvals) setApprovals(data.approvals as ExecApprovals)
+      if (data.approvals) {
+        const raw = data.approvals as ExecApprovals
+        for (const cfg of Object.values(raw.agents ?? {})) {
+          cfg.allowlist = cfg.allowlist ?? []
+          cfg.blocklist = cfg.blocklist ?? []
+        }
+        if (raw.defaults) {
+          raw.defaults.allowlist = raw.defaults.allowlist ?? []
+          raw.defaults.blocklist = raw.defaults.blocklist ?? []
+        }
+        setApprovals(raw)
+      }
       if (data.gatewayAuthMode) setGatewayAuthMode(String(data.gatewayAuthMode))
       setLastScan(new Date().toLocaleTimeString())
     } catch (e) {
