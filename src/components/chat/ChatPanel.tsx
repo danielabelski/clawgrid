@@ -277,6 +277,17 @@ function EmptyState({ name, avatar, agentId }: { name: string; avatar: string; a
   )
 }
 
+// Works on HTTP (no secure context required); falls back from randomUUID which needs HTTPS
+function uuid(): string {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  const a = new Uint8Array(16)
+  crypto.getRandomValues(a)
+  a[6] = (a[6] & 0x0f) | 0x40
+  a[8] = (a[8] & 0x3f) | 0x80
+  const h = (n: number) => n.toString(16).padStart(2, '0')
+  return `${h(a[0])}${h(a[1])}${h(a[2])}${h(a[3])}-${h(a[4])}${h(a[5])}-${h(a[6])}${h(a[7])}-${h(a[8])}${h(a[9])}-${h(a[10])}${h(a[11])}${h(a[12])}${h(a[13])}${h(a[14])}${h(a[15])}`
+}
+
 // ─── Main ChatPanel ───────────────────────────────────────────────────────────
 interface GatewayConf { assistantName: string; assistantAvatar: string; assistantAgentId: string }
 
@@ -338,12 +349,12 @@ export function ChatPanel({ instance }: { instance: OpenClawInstance }) {
       textareaRef.current.focus()
     }
 
-    const userMsg: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: text, timestamp: new Date().toISOString() }
+    const userMsg: ChatMessage = { id: uuid(), role: 'user', content: text, timestamp: new Date().toISOString() }
     const history = [...messages, userMsg]
     setMessages(history)
     setStreaming(true)
 
-    const assistantId = crypto.randomUUID()
+    const assistantId = uuid()
     setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: '', timestamp: new Date().toISOString() }])
 
     const abort = new AbortController()
