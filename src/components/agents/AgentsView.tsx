@@ -50,127 +50,142 @@ interface ToolConfig {
 
 function buildDiscoveryScript(wp: string): string {
   return `python3 - <<'PYEOF'
-import json, glob, os
+import json, sys
 from pathlib import Path
 from datetime import datetime, timezone
 
-wp = Path('${wp}')
-results = []
+def get_ts(m):
+    return m.get('timestamp') or m.get('ts') or ''
 
-def scan_dir(agents_root):
-    for d in sorted(agents_root.glob('*')):
-        if not d.is_dir(): continue
-
-        # skip hidden dirs and common non-agent dirs
-        if d.name.startswith('.') or d.name in ('node_modules', '__pycache__', 'evolution'): continue
-
-        sessions_data = []
-        sess_dir = d / 'sessions'
-        if sess_dir.exists():
-            for sf in sorted(sess_dir.glob('*.jsonl'), key=lambda f: f.stat().st_mtime):
-                msgs = []
+def parse_sessions(agent_dir):
+    sess_dir = agent_dir / 'sessions'
+    sessions_data = []
+    if not sess_dir.exists():
+        return sessions_data
+    try:
+        files = sorted(sess_dir.glob('*.jsonl'), key=lambda f: f.stat().st_mtime)
+    except Exception:
+        return sessions_data
+    for sf in files:
+        msgs = []
+        try:
+            for line in sf.read_text(errors='replace').strip().splitlines():
                 try:
-                    for line in sf.read_text(errors='replace').strip().splitlines():
-                        try:
-                            m = json.loads(line)
-                            if m.get('role') in ('user', 'assistant', 'system'):
-                                msgs.append(m)
-                        except: pass
-                except: pass
-                if msgs:
-                    def get_ts(m):
-                        return m.get('timestamp') or m.get('ts') or ''
-                    first_ts = next((get_ts(m) for m in msgs if get_ts(m)), '')
-                    last_ts  = next((get_ts(m) for m in reversed(msgs) if get_ts(m)), '')
-                    first_user = next((m for m in msgs if m.get('role') == 'user'), None)
-                    task = ''
-                    if first_user:
-                        c = first_user.get('content', '')
-                        if isinstance(c, list):
-                            c = ' '.join(p.get('text','') for p in c if isinstance(p, dict))
-                        task = str(c)[:250]
-                    sessions_data.append({
-                        'id': sf.stem,
-                        'mtime': sf.stat().st_mtime,
-                        'msg_count': len(msgs),
-                        'first_ts': first_ts,
-                        'last_ts': last_ts,
-                        'task': task,
-                    })
+                    m = json.loads(line)
+                    if m.get('role') in ('user', 'assistant', 'system'):
+                        msgs.append(m)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        if not msgs:
+            continue
+        ts_list = [get_ts(m) for m in msgs if get_ts(m)]
+        first_ts = ts_list[0] if ts_list else ''
+        last_ts  = ts_list[-1] if ts_list else ''
+        first_user = next((m for m in msgs if m.get('role') == 'user'), None)
+        task = ''
+        if first_user:
+            c = first_user.get('content', '')
+            if isinstance(c, list):
+                c = ' '.join(p.get('text', '') for p in c if isinstance(p, dict))
+            task = str(c)[:250]
+        try:
+            mtime = sf.stat().st_mtime
+        except Exception:
+            mtime = 0
+        sessions_data.append({
+            'id': sf.stem,
+            'mtime': mtime,
+            'msg_count': len(msgs),
+            'first_ts': first_ts,
+            'last_ts': last_ts,
+            'task': task,
+        })
+    sessions_data.sort(key=lambda s: s['mtime'], reverse=True)
+    return sessions_data
 
-        sessions_data.sort(key=lambda s: s['mtime'], reverse=True)
-
-        # Parent reference from SOUL.md
-        soul = d / 'SOUL.md'
-        parent_id = None
-        description = ''
-        if soul.exists():
+def scan_agent_dir(d):
+    sessions_data = parse_sessions(d)
+    soul = d / 'SOUL.md'
+    parent_id = None
+    description = ''
+    if soul.exists():
+        try:
             for line in soul.read_text(errors='replace').splitlines():
                 ll = line.strip().lower()
-                if ll.startswith('parent_agent:') or ll.startswith('spawned_by:') or ll.startswith('parent:'):
-                    parent_id = line.split(':', 1)[1].strip()
-                if ll.startswith('description:') and not description:
-                    description = line.split(':', 1)[1].strip()
+                if not parent_id and any(ll.startswith(p) for p in ('parent_agent:', 'spawned_by:', 'parent:')):
+                    parent_id = line.split(':', 1)[1].strip() if ':' in line else ''
+                if not description and ll.startswith('description:'):
+                    description = line.split(':', 1)[1].strip() if ':' in line else ''
+        except Exception:
+            pass
+    now = datetime.now(timezone.utc).timestamp()
+    last_mtime = sessions_data[0]['mtime'] if sessions_data else 0
+    is_active = bool(sessions_data) and (now - last_mtime) < 1800
+    return {
+        'id': d.name,
+        'is_active': is_active,
+        'parent_id': parent_id or None,
+        'description': description,
+        'session_count': len(sessions_data),
+        'sessions': sessions_data[:6],
+        'created_at': sessions_data[-1]['first_ts'] if sessions_data else '',
+        'last_active': sessions_data[0]['last_ts'] if sessions_data else '',
+        'last_task': sessions_data[0]['task'] if sessions_data else '',
+        'name': '',
+        'role': '',
+    }
 
-        # Active if last modified < 30 min ago
-        now = datetime.now(timezone.utc).timestamp()
-        last_mtime = sessions_data[0]['mtime'] if sessions_data else 0
-        is_active = bool(sessions_data) and (now - last_mtime) < 1800
+try:
+    wp = Path('${wp}')
+    results = []
+    seen = set()
 
-        created_at  = sessions_data[-1]['first_ts'] if sessions_data else ''
-        last_active = sessions_data[0]['last_ts'] or ''
-        last_task   = sessions_data[0]['task'] if sessions_data else ''
+    agents_dir = wp / 'agents'
+    if agents_dir.exists():
+        for d in sorted(agents_dir.iterdir()):
+            if not d.is_dir(): continue
+            if d.name.startswith('.') or d.name in ('node_modules', '__pycache__', 'evolution'): continue
+            entry = scan_agent_dir(d)
+            results.append(entry)
+            seen.add(d.name)
 
-        results.append({
-            'id': d.name,
-            'is_active': is_active,
-            'parent_id': parent_id,
-            'description': description,
-            'session_count': len(sessions_data),
-            'sessions': sessions_data[:6],
-            'created_at': created_at,
-            'last_active': last_active,
-            'last_task': last_task,
-        })
+    tasks_dir = wp / 'tasks'
+    if tasks_dir.exists():
+        for d in sorted(tasks_dir.iterdir()):
+            if d.is_dir() and d.name not in seen:
+                results.append({
+                    'id': d.name, 'is_active': False, 'parent_id': None,
+                    'description': 'task', 'session_count': 0, 'sessions': [],
+                    'created_at': '', 'last_active': '', 'last_task': '',
+                    'name': d.name.replace('-', ' ').title(), 'role': 'task',
+                })
 
-# primary: agents/
-agents_dir = wp / 'agents'
-if agents_dir.exists():
-    scan_dir(agents_dir)
+    cfg_file = wp / 'openclaw.json'
+    if cfg_file.exists():
+        try:
+            cfg = json.loads(cfg_file.read_text(errors='replace'))
+            raw = cfg.get('agents', {})
+            agent_defs = {}
+            if isinstance(raw, list):
+                for a in raw:
+                    if a.get('id'): agent_defs[a['id']] = a
+            elif isinstance(raw, dict):
+                for k, v in raw.items():
+                    agent_defs[k] = {'id': k, **(v if isinstance(v, dict) else {})}
+            for r in results:
+                defn = agent_defs.get(r['id'], {})
+                if not r['name']: r['name'] = defn.get('name') or r['id'].replace('-', ' ').title()
+                if not r['role']: r['role'] = defn.get('role') or ''
+        except Exception:
+            for r in results:
+                if not r['name']: r['name'] = r['id'].replace('-', ' ').title()
 
-# secondary: tasks/ (some OpenClaw versions use this for subagent storage)
-tasks_dir = wp / 'tasks'
-if tasks_dir.exists():
-    existing_ids = {r['id'] for r in results}
-    for d in sorted(tasks_dir.glob('*')):
-        if d.is_dir() and d.name not in existing_ids:
-            results.append({
-                'id': d.name, 'is_active': False, 'parent_id': None,
-                'description': 'task', 'session_count': 0, 'sessions': [],
-                'created_at': '', 'last_active': '', 'last_task': '',
-            })
-
-# Enrich from openclaw.json
-cfg_file = wp / 'openclaw.json'
-agent_defs = {}
-if cfg_file.exists():
-    try:
-        cfg = json.loads(cfg_file.read_text(errors='replace'))
-        raw = cfg.get('agents', {})
-        if isinstance(raw, list):
-            for a in raw:
-                if a.get('id'): agent_defs[a['id']] = a
-        elif isinstance(raw, dict):
-            for k, v in raw.items():
-                agent_defs[k] = {'id': k, **v}
-    except: pass
-
-for r in results:
-    defn = agent_defs.get(r['id'], {})
-    r['name'] = defn.get('name') or (r['id'].replace('-', ' ').title())
-    r['role'] = defn.get('role') or ''
-
-print(json.dumps(results, default=str))
+    print(json.dumps(results, default=str))
+except Exception as e:
+    print(json.dumps([]))
+    print('ERR: ' + str(e), file=__import__('sys').stderr)
 PYEOF`
 }
 
@@ -634,7 +649,9 @@ export function AgentsView({ instance }: { instance: OpenClawInstance }) {
     setError(null)
     try {
       const raw = await sshExec(instance.id, buildDiscoveryScript(instance.workspacePath))
-      const parsed: AgentNode[] = JSON.parse(raw.trim())
+      const trimmed = raw.trim()
+      if (!trimmed) { setAgents([]); return }
+      const parsed: AgentNode[] = JSON.parse(trimmed)
       // Sort: active first, then by last_active desc
       parsed.sort((a, b) => {
         if (a.is_active !== b.is_active) return a.is_active ? -1 : 1
