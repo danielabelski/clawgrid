@@ -4,7 +4,7 @@ import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import {
   LayoutDashboard, MessageSquare, Clock, Brain,
-  DollarSign, Radio, Settings, Plus, Terminal, Zap, History, Package, Activity, Shield, Sparkles, Menu, X
+  DollarSign, Radio, Settings, Plus, Terminal, Zap, History, Package, Activity, Shield, Sparkles, Menu, X, Shuffle
 } from 'lucide-react'
 import type { OpenClawInstance } from '@/types'
 
@@ -53,6 +53,7 @@ export function Sidebar({ instances }: { instances: OpenClawInstance[] }) {
   }, [isOpen])
 
   const activeLabel = pathname === '/fleet' ? 'Fleet Overview'
+    : pathname === '/routing' ? 'Model Routing'
     : pathname === '/settings' ? 'Panel Settings'
     : pathname.startsWith('/instances/new') ? 'Add Instance'
     : activeInstance
@@ -115,6 +116,9 @@ export function Sidebar({ instances }: { instances: OpenClawInstance[] }) {
         <div style={{ padding: '10px 10px 4px', display: 'flex', flexDirection: 'column', gap: 2 }}>
           <Link href="/fleet" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 8, fontSize: 13, textDecoration: 'none', background: pathname === '/fleet' ? 'var(--accent)' : 'transparent', color: pathname === '/fleet' ? 'white' : 'var(--text-muted)', transition: 'all 0.15s' }}>
             <LayoutDashboard size={14} /><span>Fleet Overview</span>
+          </Link>
+          <Link href="/routing" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 8, fontSize: 13, textDecoration: 'none', background: pathname === '/routing' ? 'var(--accent-dim)' : 'transparent', color: pathname === '/routing' ? 'var(--accent)' : 'var(--text-dim)', transition: 'all 0.15s' }}>
+            <Shuffle size={14} /><span>Model Routing</span>
           </Link>
           <Link href="/settings" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 8, fontSize: 13, textDecoration: 'none', background: pathname === '/settings' ? 'var(--accent-dim)' : 'transparent', color: pathname === '/settings' ? 'var(--accent)' : 'var(--text-dim)', transition: 'all 0.15s' }}>
             <Settings size={14} /><span>Panel Settings</span>

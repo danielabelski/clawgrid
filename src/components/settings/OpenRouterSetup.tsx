@@ -20,11 +20,11 @@ export function OpenRouterSetup({ instance }: { instance: OpenClawInstance }) {
   const checkStatus = useCallback(async () => {
     setChecking(true)
     try {
-      const wp = instance.workspacePath
+      const b64Wp = btoa(instance.workspacePath)
       const raw = await sshExec(instance.id, `python3 - <<'PYEOF'
-import json
+import json, base64
 from pathlib import Path
-wp = Path('${wp}')
+wp = Path(base64.b64decode('${b64Wp}').decode())
 try:
     cfg = json.loads((wp / 'openclaw.json').read_text())
     has_profile = 'openrouter:default' in cfg.get('auth', {}).get('profiles', {})
@@ -58,14 +58,13 @@ PYEOF`)
     setApplying(true)
     setResult(null)
     try {
-      const wp = instance.workspacePath
-      // Base64-encode key so it's safe to embed in heredoc (no shell-special chars)
+      const b64Wp = btoa(instance.workspacePath)
       const b64 = btoa(key)
       const raw = await sshExec(instance.id, `python3 - <<'PYEOF'
 import json, base64
 from pathlib import Path
 
-wp = Path('${wp}')
+wp = Path(base64.b64decode('${b64Wp}').decode())
 api_key = base64.b64decode('${b64}').decode()
 
 # Add openrouter:default profile to openclaw.json
