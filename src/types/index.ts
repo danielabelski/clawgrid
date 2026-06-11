@@ -57,4 +57,5 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
   timestamp: string
+  attachments?: { name: string; dataUrl: string }[]
 }

@@ -40,6 +40,60 @@ function injectStyle() {
   document.head.appendChild(el)
 }
 
+// ─── Attachment helpers ───────────────────────────────────────────────────────
+
+interface Attachment {
+  id: string
+  name: string
+  kind: 'image' | 'text'
+  mimeType: string
+  size: number
+  content: string  // data URL for images, raw text for text files
+}
+
+const TEXT_EXTS = new Set(['txt','md','ts','tsx','js','jsx','json','py','sh','bash','sql','csv','yaml','yml','toml','xml','html','css','rs','go','java','kt','rb','php','c','cpp','h','hpp','swift','vue','svelte','env','log'])
+
+function isTextFile(f: File): boolean {
+  return f.type.startsWith('text/') || TEXT_EXTS.has(f.name.split('.').pop()?.toLowerCase() ?? '')
+}
+
+function readFile(f: File): Promise<Attachment> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    const kind = f.type.startsWith('image/') ? 'image' : 'text'
+    reader.onload = () => resolve({ id: '', name: f.name, kind, mimeType: f.type || 'text/plain', size: f.size, content: reader.result as string })
+    reader.onerror = () => reject(reader.error)
+    kind === 'image' ? reader.readAsDataURL(f) : reader.readAsText(f)
+  })
+}
+
+function fmtSize(n: number): string {
+  if (n < 1024) return `${n}B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`
+  return `${(n / 1024 / 1024).toFixed(1)}MB`
+}
+
+function AttachmentChip({ att, onRemove }: { att: Attachment; onRemove: () => void }) {
+  return (
+    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6, background: 'var(--surface3)', border: '1px solid var(--border)', borderRadius: 8, padding: att.kind === 'image' ? '3px 26px 3px 3px' : '5px 26px 5px 8px', maxWidth: 200 }}>
+      {att.kind === 'image' ? (
+        <img src={att.content} alt={att.name} style={{ width: 36, height: 36, objectFit: 'cover', borderRadius: 5, flexShrink: 0 }} />
+      ) : (
+        <div style={{ width: 26, height: 26, borderRadius: 5, background: 'var(--accent-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        </div>
+      )}
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 11, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 120 }}>{att.name}</div>
+        <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>{fmtSize(att.size)}</div>
+      </div>
+      <button onClick={onRemove} style={{ position: 'absolute', top: -6, right: -6, width: 16, height: 16, borderRadius: '50%', background: 'var(--surface)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0, color: 'var(--text-muted)' }}>
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+  )
+}
+
 // ─── Simple markdown renderer ─────────────────────────────────────────────────
 function MarkdownContent({ text }: { text: string }) {
   const parts: React.ReactNode[] = []
@@ -223,9 +277,14 @@ function MessageBubble({ msg, isStreaming, avatar }: {
           border: isUser ? 'none' : '1px solid var(--border)',
         }}>
           {isEmpty ? <TypingDots /> : (
-            isUser
-              ? <span style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.content}</span>
-              : <MarkdownContent text={msg.content} />
+            isUser ? (
+              <div>
+                {msg.attachments?.map((att, i) => (
+                  <img key={i} src={att.dataUrl} alt={att.name} style={{ display: 'block', maxWidth: '100%', maxHeight: 260, borderRadius: 8, marginBottom: msg.content ? 8 : 0 }} />
+                ))}
+                {msg.content && <span style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.content}</span>}
+              </div>
+            ) : <MarkdownContent text={msg.content} />
           )}
         </div>
 
@@ -293,9 +352,12 @@ export function ChatPanel({ instance }: { instance: OpenClawInstance }) {
   // Per-conversation model override (falls back to instance.defaultModel)
   const [activeModel, setActiveModel] = useState<string>(instance.defaultModel ?? '')
   const [lastUsedModel, setLastUsedModel] = useState<string>('')  // from SSE response
+  const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [dragOver, setDragOver] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { injectStyle() }, [])
 
@@ -325,7 +387,10 @@ export function ChatPanel({ instance }: { instance: OpenClawInstance }) {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
     if (messages.length > 0) {
-      try { localStorage.setItem(`chat:${instance.id}`, JSON.stringify(messages.slice(-120))) } catch { /* ignore */ }
+      try {
+        const toSave = messages.slice(-120).map(m => m.attachments ? { ...m, attachments: undefined } : m)
+        localStorage.setItem(`chat:${instance.id}`, JSON.stringify(toSave))
+      } catch { /* ignore */ }
     }
   }, [messages, instance.id])
 
@@ -335,15 +400,33 @@ export function ChatPanel({ instance }: { instance: OpenClawInstance }) {
 
   const send = useCallback(async () => {
     const text = input.trim()
-    if (!text || streaming) return
+    if (!text && attachments.length === 0) return
+    if (streaming) return
+
+    const textAtts = attachments.filter(a => a.kind === 'text')
+    const imageAtts = attachments.filter(a => a.kind === 'image')
+
+    // Inline text file attachments as fenced code blocks
+    let fullText = text
+    if (textAtts.length > 0) {
+      const blocks = textAtts.map(a => {
+        const ext = a.name.split('.').pop() || 'text'
+        return `\`\`\`${ext}\n// ${a.name}\n${a.content}\n\`\`\``
+      }).join('\n\n')
+      fullText = blocks + (fullText ? '\n\n' + fullText : '')
+    }
 
     setInput('')
+    setAttachments([])
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
       textareaRef.current.focus()
     }
 
-    const userMsg: ChatMessage = { id: uuid(), role: 'user', content: text, timestamp: new Date().toISOString() }
+    const userMsg: ChatMessage = {
+      id: uuid(), role: 'user', content: fullText, timestamp: new Date().toISOString(),
+      attachments: imageAtts.length > 0 ? imageAtts.map(a => ({ name: a.name, dataUrl: a.content })) : undefined,
+    }
     const history = [...messages, userMsg]
     setMessages(history)
     setStreaming(true)
@@ -354,13 +437,24 @@ export function ChatPanel({ instance }: { instance: OpenClawInstance }) {
     const abort = new AbortController()
     abortRef.current = abort
 
+    // Build API-ready content for the current user message (may be multimodal)
+    const apiUserContent = imageAtts.length > 0
+      ? [
+          ...imageAtts.map(a => ({ type: 'image_url', image_url: { url: a.content } })),
+          ...(fullText ? [{ type: 'text', text: fullText }] : []),
+        ]
+      : fullText
+
     // Send at most the last 20 messages. The gateway caches thinking-block
     // signatures internally; replaying older turns risks sending stale signatures
     // that Anthropic rejects with "Invalid signature in thinking block".
     const recentHistory = history.slice(-20)
     const apiMessages = [
       ...(systemPrompt.trim() ? [{ role: 'system', content: systemPrompt.trim() }] : []),
-      ...recentHistory.map(m => ({ role: m.role, content: m.content })),
+      ...recentHistory.map(m => ({
+        role: m.role,
+        content: m.id === userMsg.id ? apiUserContent : m.content,
+      })),
     ]
 
     try {
@@ -420,7 +514,7 @@ export function ChatPanel({ instance }: { instance: OpenClawInstance }) {
       setStreaming(false)
       abortRef.current = null
     }
-  }, [input, streaming, messages, instance.id, systemPrompt])
+  }, [input, attachments, streaming, messages, instance.id, systemPrompt, activeModel])
 
   function stopGeneration() {
     abortRef.current?.abort()
@@ -447,7 +541,37 @@ export function ChatPanel({ instance }: { instance: OpenClawInstance }) {
     try { localStorage.setItem(`chat:${instance.id}:system`, val) } catch { /* ignore */ }
   }
 
-  const canSend = input.trim().length > 0 && !streaming
+  async function handleFiles(files: FileList | File[]) {
+    const arr = Array.from(files)
+    const allowed = arr.filter(f => {
+      if (f.type.startsWith('image/')) {
+        if (f.size > 5 * 1024 * 1024) { alert(`${f.name} exceeds 5MB limit`); return false }
+        return true
+      }
+      if (isTextFile(f)) {
+        if (f.size > 200 * 1024) { alert(`${f.name} exceeds 200KB limit`); return false }
+        return true
+      }
+      return false
+    })
+    const results = await Promise.all(allowed.map(f => readFile(f).catch(() => null)))
+    setAttachments(prev => [
+      ...prev,
+      ...results.filter((r): r is Attachment => r !== null).map(r => ({ ...r, id: uuid() })),
+    ])
+  }
+
+  function removeAttachment(id: string) {
+    setAttachments(prev => prev.filter(a => a.id !== id))
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault()
+    setDragOver(false)
+    if (e.dataTransfer.files.length > 0) handleFiles(e.dataTransfer.files)
+  }
+
+  const canSend = (input.trim().length > 0 || attachments.length > 0) && !streaming
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg)', overflow: 'hidden' }}>
@@ -577,49 +701,92 @@ export function ChatPanel({ instance }: { instance: OpenClawInstance }) {
 
       {/* ── Input ── */}
       <div style={{ padding: '10px 14px 14px', background: 'var(--surface)', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
-        <div style={{
-          display: 'flex', alignItems: 'flex-end', gap: 8,
-          background: 'var(--surface2)', border: '1px solid var(--border)',
-          borderRadius: 14, padding: '8px 10px 8px 14px',
-        }}>
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={autoResize}
-            onKeyDown={handleKeyDown}
-            placeholder={`Message ${agentName}…`}
-            rows={1}
-            style={{
-              flex: 1, background: 'transparent', border: 'none', outline: 'none',
-              resize: 'none', fontSize: 14, lineHeight: 1.6, color: 'var(--text)',
-              maxHeight: 160, minHeight: 22, fontFamily: 'inherit', padding: 0,
-            }}
-          />
+        {/* Hidden file input */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml,text/plain,text/markdown,.md,.txt,.ts,.tsx,.js,.jsx,.json,.py,.sh,.sql,.csv,.yaml,.yml,.toml,.xml,.html,.css,.rs,.go,.java,.kt,.rb,.php,.c,.cpp,.h,.env,.log"
+          style={{ display: 'none' }}
+          onChange={e => { if (e.target.files) { handleFiles(e.target.files); e.target.value = '' } }}
+        />
 
-          {streaming ? (
-            <button onClick={stopGeneration} title="Stop" style={{
-              width: 34, height: 34, borderRadius: 10, border: 'none', flexShrink: 0,
-              background: 'var(--error)', color: '#fff', cursor: 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
-            </button>
-          ) : (
-            <button onClick={send} disabled={!canSend} title="Send" style={{
-              width: 34, height: 34, borderRadius: 10, border: 'none', flexShrink: 0,
-              background: canSend ? '#3b82f6' : 'var(--surface3)',
-              color: canSend ? '#fff' : 'var(--text-dim)', cursor: canSend ? 'pointer' : 'not-allowed',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              transition: 'background 0.15s',
-            }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+        <div
+          style={{
+            background: 'var(--surface2)',
+            border: `1px solid ${dragOver ? 'var(--accent)' : 'var(--border)'}`,
+            borderRadius: 14, transition: 'border-color 0.15s',
+          }}
+          onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+          onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false) }}
+          onDrop={handleDrop}
+        >
+          {/* Attachment preview strip */}
+          {attachments.length > 0 && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', padding: '8px 10px 4px 12px' }}>
+              {attachments.map(att => (
+                <AttachmentChip key={att.id} att={att} onRemove={() => removeAttachment(att.id)} />
+              ))}
+            </div>
+          )}
+
+          {/* Input row */}
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, padding: '8px 10px 8px 8px' }}>
+            {/* Paperclip button */}
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              title="Attach file (images, code, text)"
+              style={{
+                padding: '5px 6px', borderRadius: 8, border: 'none', background: 'transparent',
+                color: attachments.length > 0 ? 'var(--accent)' : 'var(--text-dim)',
+                cursor: 'pointer', display: 'flex', alignItems: 'center', flexShrink: 0,
+              }}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
               </svg>
             </button>
-          )}
+
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={autoResize}
+              onKeyDown={handleKeyDown}
+              placeholder={attachments.length > 0 ? `Add a message… (or send ${attachments.length} file${attachments.length > 1 ? 's' : ''})` : `Message ${agentName}…`}
+              rows={1}
+              style={{
+                flex: 1, background: 'transparent', border: 'none', outline: 'none',
+                resize: 'none', fontSize: 14, lineHeight: 1.6, color: 'var(--text)',
+                maxHeight: 160, minHeight: 22, fontFamily: 'inherit', padding: 0,
+              }}
+            />
+
+            {streaming ? (
+              <button onClick={stopGeneration} title="Stop" style={{
+                width: 34, height: 34, borderRadius: 10, border: 'none', flexShrink: 0,
+                background: 'var(--error)', color: '#fff', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+              </button>
+            ) : (
+              <button onClick={send} disabled={!canSend} title="Send" style={{
+                width: 34, height: 34, borderRadius: 10, border: 'none', flexShrink: 0,
+                background: canSend ? '#3b82f6' : 'var(--surface3)',
+                color: canSend ? '#fff' : 'var(--text-dim)', cursor: canSend ? 'pointer' : 'not-allowed',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                transition: 'background 0.15s',
+              }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                </svg>
+              </button>
+            )}
+          </div>
         </div>
+
         <p style={{ fontSize: 10, color: 'var(--text-dim)', textAlign: 'center', marginTop: 7, userSelect: 'none' }}>
-          Enter to send · Shift+Enter for newline
+          Enter to send · Shift+Enter for newline · Drag & drop files
         </p>
       </div>
     </div>
